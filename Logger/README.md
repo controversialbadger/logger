@@ -99,8 +99,82 @@ logger = SecureLogger(
     log_level=logging.INFO,            # Logging level
     max_log_size=10 * 1024 * 1024,     # 10MB max log file size
     backup_count=5,                    # Number of backup files to keep
-    enable_security_scan=True          # Enable/disable security scanning
+    enable_security_scan=True,         # Enable/disable security scanning
+    enable_email_alerts=False,         # Enable/disable email alerts
+    email_config={                     # Email configuration
+        'smtp_server': 'smtp.example.com',
+        'smtp_port': 587,
+        'smtp_user': 'username',
+        'smtp_password': 'password',
+        'from_addr': 'alerts@example.com',
+        'to_addrs': ['admin@example.com'],
+        'use_tls': True,
+        'subject_prefix': '[SECURITY ALERT]',
+        'min_level_for_email': logging.WARNING
+    },
+    console_config={                   # Console output configuration
+        'enable': True,
+        'format': '%(asctime)s - %(levelname)s - %(message)s',
+        'colors': True,
+        'min_level': logging.INFO
+    }
 )
+```
+
+## Email Alerts
+
+The logger can be configured to send email alerts when suspicious content is detected:
+
+### Email Configuration
+
+- **SMTP Settings**: Configure your SMTP server details for sending emails
+- **Recipients**: Specify who should receive security alerts
+- **Alert Levels**: Set minimum log level that triggers email alerts
+- **Customization**: Customize email subject prefix and format
+
+### Example Email Configuration
+
+```python
+email_config = {
+    'smtp_server': 'smtp.gmail.com',
+    'smtp_port': 587,
+    'smtp_user': 'your-email@gmail.com',
+    'smtp_password': 'your-app-password',
+    'from_addr': 'security-alerts@yourcompany.com',
+    'to_addrs': ['admin@yourcompany.com', 'security@yourcompany.com'],
+    'use_tls': True,
+    'subject_prefix': '[CRITICAL SECURITY ALERT]',
+    'min_level_for_email': logging.WARNING
+}
+
+logger = SecureLogger(
+    enable_email_alerts=True,
+    email_config=email_config
+)
+```
+
+## Console Output
+
+The logger supports customizable console output:
+
+### Console Configuration
+
+- **Enable/Disable**: Turn console output on or off
+- **Format**: Customize the format of console log messages
+- **Colors**: Enable or disable colored output in the console
+- **Minimum Level**: Set the minimum log level for console output
+
+### Example Console Configuration
+
+```python
+console_config = {
+    'enable': True,
+    'format': '%(asctime)s [%(levelname)s] %(message)s',
+    'colors': True,
+    'min_level': logging.DEBUG
+}
+
+logger = SecureLogger(console_config=console_config)
 ```
 
 ## Log Files

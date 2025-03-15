@@ -3,8 +3,12 @@ import re
 import json
 import logging
 import hashlib
+import smtplib
+import socket
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional, Union, Tuple
 
 class SecureLogger:
     """
@@ -28,7 +32,10 @@ class SecureLogger:
                  log_level: int = logging.INFO,
                  max_log_size: int = 10 * 1024 * 1024,  # 10MB
                  backup_count: int = 5,
-                 enable_security_scan: bool = True):
+                 enable_security_scan: bool = True,
+                 enable_email_alerts: bool = False,
+                 email_config: Optional[Dict[str, Any]] = None,
+                 console_config: Optional[Dict[str, Any]] = None):
         """
         Initialize the secure logger.
         
@@ -38,12 +45,53 @@ class SecureLogger:
             max_log_size: Maximum size of log file before rotation
             backup_count: Number of backup files to keep
             enable_security_scan: Whether to scan logs for suspicious content
+            enable_email_alerts: Whether to send email alerts for security issues
+            email_config: Email configuration dictionary with keys:
+                - smtp_server: SMTP server address
+                - smtp_port: SMTP server port
+                - smtp_user: SMTP username
+                - smtp_password: SMTP password
+                - from_addr: Sender email address
+                - to_addrs: List of recipient email addresses
+                - use_tls: Whether to use TLS (default: True)
+            console_config: Console configuration dictionary with keys:
+                - enable: Whether to enable console output
+                - format: Console output format
+                - colors: Whether to use colors in console output
         """
         self.log_dir = log_dir
         self.log_level = log_level
         self.max_log_size = max_log_size
         self.backup_count = backup_count
         self.enable_security_scan = enable_security_scan
+        self.enable_email_alerts = enable_email_alerts
+        
+        # Email configuration
+        self.email_config = {
+            'smtp_server': 'localhost',
+            'smtp_port': 25,
+            'smtp_user': '',
+            'smtp_password': '',
+            'from_addr': f'securelogger@{socket.gethostname()}',
+            'to_addrs': [],
+            'use_tls': True,
+            'subject_prefix': '[SECURITY ALERT]',
+            'min_level_for_email': logging.WARNING
+        }
+        
+        if email_config:
+            self.email_config.update(email_config)
+        
+        # Console configuration
+        self.console_config = {
+            'enable': True,
+            'format': '%(asctime)s - %(levelname)s - %(message)s',
+            'colors': True,
+            'min_level': logging.INFO
+        }
+        
+        if console_config:
+            self.console_config.update(console_config)
         
         # Create log directory if it doesn't exist
         os.makedirs(log_dir, exist_ok=True)
@@ -85,10 +133,13 @@ class SecureLogger:
         # Add handler to logger
         self.logger.addHandler(file_handler)
         
-        # Create console handler
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(formatter)
-        self.logger.addHandler(console_handler)
+        # Create console handler if enabled
+        if self.console_config['enable']:
+            console_handler = logging.StreamHandler()
+            console_formatter = logging.Formatter(self.console_config['format'])
+            console_handler.setFormatter(console_formatter)
+            console_handler.setLevel(self.console_config['min_level'])
+            self.logger.addHandler(console_handler)
     
     def _check_for_suspicious_content(self, message: str) -> List[str]:
         """
@@ -146,14 +197,30 @@ class SecureLogger:
         
         # If suspicious content is found, log it to security log
         if suspicious_matches:
-            self.security_logger.warning(
+            security_message = (
                 f"Suspicious content detected in log message: {sanitized_message}. "
                 f"Matched patterns: {', '.join(suspicious_matches)}"
             )
+            self.security_logger.warning(security_message)
             
             # Add security metadata to the log
             kwargs['security_alert'] = True
             kwargs['matched_patterns'] = suspicious_matches
+            
+            # Send email alert if enabled and level is high enough
+            if (self.enable_email_alerts and 
+                level >= self.email_config['min_level_for_email']):
+                subject = f"Suspicious content detected in log message"
+                email_message = (
+                    f"The following suspicious content was detected in a log message:\n\n"
+                    f"Message: {sanitized_message}\n\n"
+                    f"Matched patterns: {', '.join(suspicious_matches)}\n\n"
+                    f"Log level: {logging.getLevelName(level)}\n"
+                    f"Additional metadata: {json.dumps(kwargs, indent=2)}"
+                )
+                success, error = self._send_email_alert(subject, email_message)
+                if not success:
+                    self.error(f"Failed to send email alert: {error}")
         
         # Create structured log entry
         log_entry = {
@@ -219,12 +286,30 @@ class SecureLogger:
             suspicious_matches = self._check_for_suspicious_content(content)
             
             if suspicious_matches:
-                self.warning(
+                security_message = (
                     f"Suspicious content detected in file: {file_path}. "
-                    f"Matched patterns: {', '.join(suspicious_matches)}",
+                    f"Matched patterns: {', '.join(suspicious_matches)}"
+                )
+                self.warning(
+                    security_message,
                     file_hash=file_hash,
                     file_size=file_size
                 )
+                
+                # Send email alert if enabled
+                if self.enable_email_alerts:
+                    subject = f"Suspicious content detected in file"
+                    email_message = (
+                        f"The following suspicious content was detected in a file:\n\n"
+                        f"File: {file_path}\n"
+                        f"File size: {file_size} bytes\n"
+                        f"File hash (SHA-256): {file_hash}\n\n"
+                        f"Matched patterns: {', '.join(suspicious_matches)}\n\n"
+                        f"This file should be investigated for potential security issues."
+                    )
+                    success, error = self._send_email_alert(subject, email_message)
+                    if not success:
+                        self.error(f"Failed to send email alert: {error}")
             
             # Log the file content
             self.log(
@@ -248,3 +333,50 @@ class SecureLogger:
             for byte_block in iter(lambda: f.read(4096), b""):
                 sha256_hash.update(byte_block)
         return sha256_hash.hexdigest()
+        
+    def _send_email_alert(self, subject: str, message: str) -> Tuple[bool, str]:
+        """
+        Send an email alert for security issues.
+        
+        Args:
+            subject: Email subject
+            message: Email message body
+            
+        Returns:
+            Tuple of (success, error_message)
+        """
+        if not self.enable_email_alerts or not self.email_config['to_addrs']:
+            return False, "Email alerts disabled or no recipients configured"
+        
+        try:
+            # Create message
+            msg = MIMEMultipart()
+            msg['From'] = self.email_config['from_addr']
+            msg['To'] = ', '.join(self.email_config['to_addrs'])
+            msg['Subject'] = f"{self.email_config['subject_prefix']} {subject}"
+            
+            # Add hostname and timestamp to the message
+            full_message = f"Host: {socket.gethostname()}\n"
+            full_message += f"Time: {datetime.now().isoformat()}\n\n"
+            full_message += message
+            
+            msg.attach(MIMEText(full_message, 'plain'))
+            
+            # Connect to SMTP server
+            if self.email_config['use_tls']:
+                smtp = smtplib.SMTP(self.email_config['smtp_server'], self.email_config['smtp_port'])
+                smtp.starttls()
+            else:
+                smtp = smtplib.SMTP(self.email_config['smtp_server'], self.email_config['smtp_port'])
+            
+            # Login if credentials provided
+            if self.email_config['smtp_user'] and self.email_config['smtp_password']:
+                smtp.login(self.email_config['smtp_user'], self.email_config['smtp_password'])
+            
+            # Send email
+            smtp.send_message(msg)
+            smtp.quit()
+            
+            return True, ""
+        except Exception as e:
+            return False, str(e)

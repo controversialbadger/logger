@@ -55,6 +55,65 @@ def check_logs():
             print(f"  Error reading file: {e}")
         print()
 
+def show_email_config_example():
+    """Show example of email configuration."""
+    print_header("Email Configuration Example")
+    
+    print("To enable email alerts, you can configure the logger as follows:")
+    print("\nPython code example:")
+    print("""
+    from logger import SecureLogger
+    import logging
+    
+    # Email configuration
+    email_config = {
+        'smtp_server': 'smtp.gmail.com',
+        'smtp_port': 587,
+        'smtp_user': 'your-email@gmail.com',
+        'smtp_password': 'your-app-password',
+        'from_addr': 'security-alerts@yourcompany.com',
+        'to_addrs': ['admin@yourcompany.com', 'security@yourcompany.com'],
+        'use_tls': True,
+        'subject_prefix': '[SECURITY ALERT]',
+        'min_level_for_email': logging.WARNING
+    }
+    
+    # Initialize logger with email alerts enabled
+    logger = SecureLogger(
+        enable_email_alerts=True,
+        email_config=email_config
+    )
+    """)
+    
+    print("\nWhen suspicious content is detected, an email alert will be sent to the configured recipients.")
+    print("For Gmail, you'll need to use an App Password instead of your regular password.")
+    print("See: https://support.google.com/accounts/answer/185833")
+
+def show_console_config_example():
+    """Show example of console configuration."""
+    print_header("Console Configuration Example")
+    
+    print("You can customize the console output with the following configuration:")
+    print("\nPython code example:")
+    print("""
+    from logger import SecureLogger
+    import logging
+    
+    # Console configuration
+    console_config = {
+        'enable': True,                                # Enable/disable console output
+        'format': '%(asctime)s [%(levelname)s] %(message)s',  # Custom format
+        'colors': True,                                # Enable colored output
+        'min_level': logging.DEBUG                     # Show all messages including debug
+    }
+    
+    # Initialize logger with custom console configuration
+    logger = SecureLogger(console_config=console_config)
+    """)
+    
+    print("\nThis allows you to control how log messages appear in the console.")
+    print("You can disable console output entirely by setting 'enable' to False.")
+
 def main():
     """Run the demo and tests."""
     print_header("Secure Logger Demo")
@@ -66,6 +125,12 @@ def main():
         # Wait a moment for logs to be written
         time.sleep(1)
         check_logs()
+    
+    # Show email configuration example
+    show_email_config_example()
+    
+    # Show console configuration example
+    show_console_config_example()
     
     # Run the tests
     run_command("python test_security.py", "Running Security Tests")

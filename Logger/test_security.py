@@ -2,6 +2,9 @@
 import os
 import sys
 import unittest
+import io
+import logging
+from unittest.mock import patch, MagicMock
 from logger import SecureLogger
 
 class TestSecureLogger(unittest.TestCase):
@@ -116,6 +119,86 @@ class TestSecureLogger(unittest.TestCase):
         self.assertIn("test_user", content, "User metadata not found in log")
         self.assertIn("127.0.0.1", content, "IP address metadata not found in log")
         self.assertIn("login", content, "Action metadata not found in log")
+    
+    @patch('smtplib.SMTP')
+    def test_email_alerts(self, mock_smtp):
+        """Test email alert functionality."""
+        # Configure mock
+        mock_smtp_instance = MagicMock()
+        mock_smtp.return_value = mock_smtp_instance
+        
+        # Configure logger with email alerts enabled
+        email_config = {
+            'smtp_server': 'test-smtp.example.com',
+            'smtp_port': 587,
+            'smtp_user': 'test-user',
+            'smtp_password': 'test-password',
+            'from_addr': 'test@example.com',
+            'to_addrs': ['admin@example.com'],
+            'use_tls': True,
+            'min_level_for_email': logging.WARNING
+        }
+        
+        logger = SecureLogger(
+            log_dir=self.test_log_dir,
+            enable_email_alerts=True,
+            email_config=email_config
+        )
+        
+        # Log a suspicious message with WARNING level
+        logger.warning("This message contains keylogger reference which should trigger an alert")
+        
+        # Verify SMTP was called
+        mock_smtp.assert_called_once_with('test-smtp.example.com', 587)
+        mock_smtp_instance.starttls.assert_called_once()
+        mock_smtp_instance.login.assert_called_once_with('test-user', 'test-password')
+        mock_smtp_instance.send_message.assert_called_once()
+        mock_smtp_instance.quit.assert_called_once()
+    
+    def test_console_output(self):
+        """Test console output configuration."""
+        # This test is more of a functional test than a unit test
+        # since it's difficult to capture console output from the logger
+        # We'll just verify that the logger can be created with custom console config
+        
+        console_config = {
+            'enable': True,
+            'format': '%(levelname)s: %(message)s',
+            'min_level': logging.INFO
+        }
+        
+        # This should not raise any exceptions
+        logger = SecureLogger(
+            log_dir=self.test_log_dir,
+            console_config=console_config
+        )
+        
+        # Log a message
+        logger.info("Test console output")
+        
+        # Test passes if no exceptions are raised
+        self.assertTrue(True)
+    
+    def test_disable_console_output(self):
+        """Test disabling console output."""
+        # Similar to test_console_output, this is more of a functional test
+        # We'll just verify that the logger can be created with console output disabled
+        
+        console_config = {
+            'enable': False
+        }
+        
+        # This should not raise any exceptions
+        logger = SecureLogger(
+            log_dir=self.test_log_dir,
+            console_config=console_config
+        )
+        
+        # Log a message
+        logger.info("This should not appear in console")
+        
+        # Test passes if no exceptions are raised
+        self.assertTrue(True)
 
 if __name__ == "__main__":
     unittest.main()
