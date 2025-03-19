@@ -121,8 +121,17 @@ async def validate_email_async(email: str, check_deliverability: bool = True, ch
         if check_deliverability:
             domain_cache[domain] = True
         
-        warning = "UWAGA: Walidacja sprawdza tylko czy domena może odbierać wiadomości, nie weryfikuje czy konkretny adres email istnieje."
-        return True, valid.normalized, warning
+        # If check_existence is True, verify if the email actually exists
+        if check_existence:
+            exists, error_message = await check_email_exists(email)
+            if not exists:
+                return False, error_message or "Adres email nie istnieje na serwerze pocztowym", None
+            # No warning needed if we've verified existence
+            return True, valid.normalized, None
+        else:
+            # Only show warning if we didn't check existence
+            warning = "UWAGA: Walidacja sprawdza tylko czy domena może odbierać wiadomości, nie weryfikuje czy konkretny adres email istnieje."
+            return True, valid.normalized, warning
     except EmailNotValidError as e:
         # Cache the negative result
         if check_deliverability and domain not in domain_cache:
@@ -130,13 +139,14 @@ async def validate_email_async(email: str, check_deliverability: bool = True, ch
         return False, str(e), None
 
 async def batch_validate(emails: List[str], check_deliverability: bool = True, 
-                         show_progress: bool = True) -> Dict[str, Dict[str, Union[bool, str, Optional[str]]]]:
+                         check_existence: bool = False, show_progress: bool = True) -> Dict[str, Dict[str, Union[bool, str, Optional[str]]]]:
     """
     Validate multiple email addresses concurrently.
     
     Args:
         emails (List[str]): List of email addresses to validate
         check_deliverability (bool): Whether to check MX records
+        check_existence (bool): Whether to check if emails actually exist
         show_progress (bool): Whether to show progress indicator
         
     Returns:
@@ -147,7 +157,7 @@ async def batch_validate(emails: List[str], check_deliverability: bool = True,
     
     # Create tasks for all emails
     for email in emails:
-        task = asyncio.create_task(validate_email_async(email, check_deliverability))
+        task = asyncio.create_task(validate_email_async(email, check_deliverability, check_existence))
         tasks.append((email, task))
     
     # Process tasks with progress indicator
@@ -195,7 +205,7 @@ async def process_file(input_file: str, output_file: Optional[str] = None,
     start_time = time.time()
     
     # Validate all emails
-    results = await batch_validate(emails, check_deliverability, check_existence)
+    results = await batch_validate(emails, check_deliverability, check_existence, True)
     
     # Get valid emails with their normalized versions
     valid_emails = [(email, data["result"]) for email, data in results.items() if data["valid"]]
