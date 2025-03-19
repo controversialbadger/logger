@@ -67,7 +67,7 @@ async def validate_email_async(email: str, check_deliverability: bool = True) ->
         if check_deliverability:
             domain_cache[domain] = True
             
-        return True, valid.email
+        return True, valid.normalized
     except EmailNotValidError as e:
         # Cache the negative result
         if check_deliverability and domain not in domain_cache:
