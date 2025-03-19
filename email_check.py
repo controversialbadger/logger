@@ -3,7 +3,9 @@ import re
 import time
 import os
 import argparse
+import smtplib
 from email_validator import validate_email, EmailNotValidError
+from validate_email import validate_email as verify_email_exists
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Tuple, Set, Optional, Union
 
@@ -25,13 +27,54 @@ def quick_validate(email: str) -> bool:
     """
     return bool(EMAIL_REGEX.match(email))
 
-async def validate_email_async(email: str, check_deliverability: bool = True) -> Tuple[bool, str, Optional[str]]:
+async def check_email_exists(email: str) -> Tuple[bool, Optional[str]]:
+    """
+    Check if an email address actually exists by verifying with the mail server.
+    
+    Args:
+        email (str): The email address to check
+        
+    Returns:
+        tuple: (exists, error_message) where:
+            - exists (bool): True if email exists, False otherwise
+            - error_message (Optional[str]): Error message if applicable
+    """
+    try:
+        # Run the CPU-bound validation in a thread pool
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor() as pool:
+            # verify_email_exists checks if the email exists on the mail server
+            exists = await loop.run_in_executor(
+                pool, 
+                lambda: verify_email_exists(
+                    email,
+                    check_format=False,  # We already checked format
+                    check_dns=False,     # We already checked DNS
+                    check_smtp=True,     # Check SMTP
+                    smtp_timeout=10,     # Timeout in seconds
+                    smtp_helo_host='my.host.name',  # HELO hostname
+                    smtp_from_address='verify@example.com',  # MAIL FROM address
+                    smtp_skip_tls=False, # Don't skip TLS
+                    smtp_tls_context=None, # Use default TLS context
+                    smtp_debug=False     # Don't show debug info
+                )
+            )
+        
+        if exists:
+            return True, None
+        else:
+            return False, "Adres email nie istnieje na serwerze pocztowym"
+    except Exception as e:
+        return False, f"Błąd podczas weryfikacji istnienia adresu email: {str(e)}"
+
+async def validate_email_async(email: str, check_deliverability: bool = True, check_existence: bool = False) -> Tuple[bool, str, Optional[str]]:
     """
     Asynchronously validate an email address.
     
     Args:
         email (str): The email address to validate
         check_deliverability (bool): Whether to check MX records
+        check_existence (bool): Whether to check if the email actually exists
         
     Returns:
         tuple: (is_valid, result, warning) where:
@@ -123,7 +166,7 @@ async def batch_validate(emails: List[str], check_deliverability: bool = True,
     return results
 
 async def process_file(input_file: str, output_file: Optional[str] = None, 
-                      check_deliverability: bool = True) -> Tuple[int, int]:
+                      check_deliverability: bool = True, check_existence: bool = False) -> Tuple[int, int]:
     """
     Process emails from a file and optionally write results to another file.
     
@@ -131,6 +174,7 @@ async def process_file(input_file: str, output_file: Optional[str] = None,
         input_file (str): Path to file with email addresses (one per line)
         output_file (Optional[str]): Path to output file for valid emails
         check_deliverability (bool): Whether to check MX records
+        check_existence (bool): Whether to check if emails actually exist
         
     Returns:
         Tuple[int, int]: (total_emails, valid_emails)
@@ -151,7 +195,7 @@ async def process_file(input_file: str, output_file: Optional[str] = None,
     start_time = time.time()
     
     # Validate all emails
-    results = await batch_validate(emails, check_deliverability)
+    results = await batch_validate(emails, check_deliverability, check_existence)
     
     # Get valid emails with their normalized versions
     valid_emails = [(email, data["result"]) for email, data in results.items() if data["valid"]]
@@ -178,6 +222,12 @@ async def interactive_mode():
     """
     print("=== Zaawansowany Walidator Emaili ===")
     print("Wprowadź adres email (lub wpisz 'exit', aby zakończyć):")
+    
+    # Ask if user wants to check email existence
+    check_existence = input("Czy chcesz sprawdzać czy adresy email faktycznie istnieją? (tak/nie): ").lower() == 'tak'
+    if check_existence:
+        print("UWAGA: Sprawdzanie istnienia adresów email może być wolniejsze i mniej niezawodne.")
+    
     valid_emails = []
     
     while True:
@@ -187,7 +237,7 @@ async def interactive_mode():
             break
         
         start_time = time.time()
-        is_valid, result, warning = await validate_email_async(email)
+        is_valid, result, warning = await validate_email_async(email, check_existence=check_existence)
         validation_time = time.time() - start_time
         
         if is_valid:
@@ -223,13 +273,14 @@ async def main_async():
     parser.add_argument("-o", "--output", help="Plik wyjściowy dla poprawnych adresów")
     parser.add_argument("--no-mx", action="store_true", help="Pomiń sprawdzanie rekordów MX (szybsza walidacja)")
     parser.add_argument("--email", help="Pojedynczy adres email do walidacji")
+    parser.add_argument("--check-existence", action="store_true", help="Sprawdź czy adres email faktycznie istnieje")
     
     args = parser.parse_args()
     
     # Handle single email validation
     if args.email:
         start_time = time.time()
-        is_valid, result, warning = await validate_email_async(args.email, not args.no_mx)
+        is_valid, result, warning = await validate_email_async(args.email, not args.no_mx, args.check_existence)
         validation_time = time.time() - start_time
         
         if is_valid:
@@ -242,10 +293,11 @@ async def main_async():
     
     # Handle file processing
     if args.file:
-        total, valid = await process_file(args.file, args.output, not args.no_mx)
+        total, valid = await process_file(args.file, args.output, not args.no_mx, args.check_existence)
         percentage = (valid/total*100) if total > 0 else 0
         print(f"Zwalidowano {total} adresów email, z czego {valid} jest poprawnych ({percentage:.1f}%)")
-        print("UWAGA: Walidacja sprawdza tylko czy domena może odbierać wiadomości, nie weryfikuje czy konkretny adres email istnieje.")
+        if not args.check_existence:
+            print("UWAGA: Walidacja sprawdza tylko czy domena może odbierać wiadomości, nie weryfikuje czy konkretny adres email istnieje.")
         return
     
     # Default to interactive mode
