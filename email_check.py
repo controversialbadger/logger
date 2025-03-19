@@ -25,7 +25,7 @@ def quick_validate(email: str) -> bool:
     """
     return bool(EMAIL_REGEX.match(email))
 
-async def validate_email_async(email: str, check_deliverability: bool = True) -> Tuple[bool, str]:
+async def validate_email_async(email: str, check_deliverability: bool = True) -> Tuple[bool, str, Optional[str]]:
     """
     Asynchronously validate an email address.
     
@@ -34,24 +34,35 @@ async def validate_email_async(email: str, check_deliverability: bool = True) ->
         check_deliverability (bool): Whether to check MX records
         
     Returns:
-        tuple: (is_valid, result) where:
+        tuple: (is_valid, result, warning) where:
             - is_valid (bool): True if email is valid, False otherwise
             - result (str): Normalized email if valid, error message if invalid
+            - warning (Optional[str]): Warning message if applicable
     """
     # Quick validation first
     if not quick_validate(email):
-        return False, "Niepoprawny format adresu email"
+        return False, "Niepoprawny format adresu email", None
     
     # Extract domain for cache lookup
     try:
         domain = email.split('@')[1]
     except IndexError:
-        return False, "Brak znaku @ w adresie email"
+        return False, "Brak znaku @ w adresie email", None
+    
+    # Check for common disposable email domains
+    disposable_domains = [
+        'tempmail.com', 'throwawaymail.com', 'mailinator.com', 
+        'guerrillamail.com', 'yopmail.com', 'temp-mail.org',
+        'fakeinbox.com', '10minutemail.com', 'trashmail.com'
+    ]
+    
+    if domain.lower() in disposable_domains:
+        return False, f"Domena {domain} jest tymczasową domeną email", None
     
     # Check cache for domain validation result
     if check_deliverability and domain in domain_cache:
         if not domain_cache[domain]:
-            return False, f"Domena {domain} nie może odbierać wiadomości (z pamięci podręcznej)"
+            return False, f"Domena {domain} nie może odbierać wiadomości (z pamięci podręcznej)", None
     
     # Perform full validation
     try:
@@ -66,16 +77,17 @@ async def validate_email_async(email: str, check_deliverability: bool = True) ->
         # Cache the domain result
         if check_deliverability:
             domain_cache[domain] = True
-            
-        return True, valid.normalized
+        
+        warning = "UWAGA: Walidacja sprawdza tylko czy domena może odbierać wiadomości, nie weryfikuje czy konkretny adres email istnieje."
+        return True, valid.normalized, warning
     except EmailNotValidError as e:
         # Cache the negative result
         if check_deliverability and domain not in domain_cache:
             domain_cache[domain] = False
-        return False, str(e)
+        return False, str(e), None
 
 async def batch_validate(emails: List[str], check_deliverability: bool = True, 
-                         show_progress: bool = True) -> Dict[str, Union[str, bool]]:
+                         show_progress: bool = True) -> Dict[str, Dict[str, Union[bool, str, Optional[str]]]]:
     """
     Validate multiple email addresses concurrently.
     
@@ -85,7 +97,7 @@ async def batch_validate(emails: List[str], check_deliverability: bool = True,
         show_progress (bool): Whether to show progress indicator
         
     Returns:
-        Dict[str, Union[str, bool]]: Dictionary with validation results
+        Dict[str, Dict[str, Union[bool, str, Optional[str]]]]: Dictionary with validation results
     """
     results = {}
     tasks = []
@@ -98,8 +110,8 @@ async def batch_validate(emails: List[str], check_deliverability: bool = True,
     # Process tasks with progress indicator
     total = len(tasks)
     for i, (email, task) in enumerate(tasks):
-        is_valid, result = await task
-        results[email] = {"valid": is_valid, "result": result}
+        is_valid, result, warning = await task
+        results[email] = {"valid": is_valid, "result": result, "warning": warning}
         
         if show_progress:
             progress = (i + 1) / total * 100
@@ -141,15 +153,15 @@ async def process_file(input_file: str, output_file: Optional[str] = None,
     # Validate all emails
     results = await batch_validate(emails, check_deliverability)
     
-    # Count valid emails
-    valid_emails = [email for email, data in results.items() if data["valid"]]
+    # Get valid emails with their normalized versions
+    valid_emails = [(email, data["result"]) for email, data in results.items() if data["valid"]]
     
-    # Write valid emails to output file if specified
+    # Write valid normalized emails to output file if specified
     if output_file and valid_emails:
         try:
             with open(output_file, 'w') as f:
-                for email in valid_emails:
-                    f.write(f"{email}\n")
+                for _, normalized_email in valid_emails:
+                    f.write(f"{normalized_email}\n")
             print(f"Zapisano {len(valid_emails)} poprawnych adresów do pliku {output_file}")
         except Exception as e:
             print(f"Błąd podczas zapisu do pliku: {e}")
@@ -175,12 +187,14 @@ async def interactive_mode():
             break
         
         start_time = time.time()
-        is_valid, result = await validate_email_async(email)
+        is_valid, result, warning = await validate_email_async(email)
         validation_time = time.time() - start_time
         
         if is_valid:
             valid_emails.append(result)
             print(f"Email '{result}' jest poprawny. (czas: {validation_time:.4f}s)")
+            if warning:
+                print(f"  {warning}")
         else:
             print(f"Email '{email}' jest niepoprawny. Powód: {result} (czas: {validation_time:.4f}s)")
     
@@ -188,6 +202,15 @@ async def interactive_mode():
     if valid_emails:
         for email in valid_emails:
             print(f"- {email}")
+        
+        # Save valid emails to output.txt
+        try:
+            with open('output.txt', 'w') as f:
+                for email in valid_emails:
+                    f.write(f"{email}\n")
+            print(f"Zapisano {len(valid_emails)} poprawnych adresów do pliku output.txt")
+        except Exception as e:
+            print(f"Błąd podczas zapisu do pliku: {e}")
     else:
         print("Brak prawidłowych adresów email.")
 
@@ -206,11 +229,13 @@ async def main_async():
     # Handle single email validation
     if args.email:
         start_time = time.time()
-        is_valid, result = await validate_email_async(args.email, not args.no_mx)
+        is_valid, result, warning = await validate_email_async(args.email, not args.no_mx)
         validation_time = time.time() - start_time
         
         if is_valid:
             print(f"Email '{result}' jest poprawny. (czas: {validation_time:.4f}s)")
+            if warning:
+                print(f"  {warning}")
         else:
             print(f"Email '{args.email}' jest niepoprawny. Powód: {result} (czas: {validation_time:.4f}s)")
         return
@@ -220,6 +245,7 @@ async def main_async():
         total, valid = await process_file(args.file, args.output, not args.no_mx)
         percentage = (valid/total*100) if total > 0 else 0
         print(f"Zwalidowano {total} adresów email, z czego {valid} jest poprawnych ({percentage:.1f}%)")
+        print("UWAGA: Walidacja sprawdza tylko czy domena może odbierać wiadomości, nie weryfikuje czy konkretny adres email istnieje.")
         return
     
     # Default to interactive mode
