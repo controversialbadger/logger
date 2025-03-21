@@ -1,5 +1,0 @@
-test@email.com
-valid@gmail.com
-invalid@tempmail.com
-notanemail
-user@example.com
